@@ -1,0 +1,194 @@
+import pygame
+import random
+import sys
+
+# ---------- Config ----------
+WIDTH, HEIGHT = 800, 600
+FPS = 60
+PLAYER_SPEED = 5
+BULLET_SPEED = 10
+ENEMY_MIN_SPEED, ENEMY_MAX_SPEED = 2, 5
+SPAWN_MS = 600   # enemy spawn interval (milliseconds)
+
+BG_COLOR = (15, 18, 30)
+PLAYER_COLOR = (80, 200, 120)
+BULLET_COLOR = (250, 250, 250)
+ENEMY_COLOR = (220, 80, 80)
+TEXT_COLOR = (240, 240, 240)
+
+# ---------- Setup ----------
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Mini Shooter (Pygame)")
+clock = pygame.time.Clock()
+font_big = pygame.font.Font(None, 64)
+font_small = pygame.font.Font(None, 28)
+
+# ---------- Helpers ----------
+def draw_text(surface, text, size_font, color, x, y, center=True):
+    font = font_big if size_font == "big" else font_small
+    surf = font.render(text, True, color)
+    rect = surf.get_rect()
+    rect.center = (x, y) if center else (x, y)
+    surface.blit(surf, rect)
+
+# ---------- Sprites ----------
+class Player(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.w, self.h = 40, 40
+        self.image = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+        self.image.fill(PLAYER_COLOR)
+        self.rect = self.image.get_rect(center=(WIDTH // 2, HEIGHT - 60))
+        self.speed = PLAYER_SPEED
+
+    def update(self, keys):
+        dx = dy = 0
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]:   dx -= self.speed
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:  dx += self.speed
+        if keys[pygame.K_UP] or keys[pygame.K_w]:     dy -= self.speed
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]:   dy += self.speed
+
+        self.rect.x += dx
+        self.rect.y += dy
+
+        # keep on screen
+        self.rect.left = max(self.rect.left, 0)
+        self.rect.right = min(self.rect.right, WIDTH)
+        self.rect.top = max(self.rect.top, 0)
+        self.rect.bottom = min(self.rect.bottom, HEIGHT)
+
+class Bullet(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.image = pygame.Surface((6, 14), pygame.SRCALPHA)
+        self.image.fill(BULLET_COLOR)
+        self.rect = self.image.get_rect(center=(x, y))
+
+    def update(self):
+        self.rect.y -= BULLET_SPEED
+        if self.rect.bottom < 0:
+            self.kill()
+
+class Enemy(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        size = random.randint(24, 48)
+        self.image = pygame.Surface((size, size), pygame.SRCALPHA)
+        self.image.fill(ENEMY_COLOR)
+        self.rect = self.image.get_rect(
+            center=(random.randint(20, WIDTH - 20), -size)
+        )
+        self.speed = random.randint(ENEMY_MIN_SPEED, ENEMY_MAX_SPEED)
+
+        # small horizontal drift for variety
+        self.dx = random.choice([-1, 0, 1]) * random.random() * 1.5
+
+    def update(self):
+        self.rect.y += self.speed
+        self.rect.x += self.dx
+        if self.rect.top > HEIGHT + 50:
+            self.kill()
+        if self.rect.left < -40 or self.rect.right > WIDTH + 40:
+            self.dx *= -1
+
+# ---------- Game loop helpers ----------
+def spawn_enemy(enemies, all_sprites):
+    e = Enemy()
+    enemies.add(e)
+    all_sprites.add(e)
+
+def reset_game():
+    player = Player()
+    bullets = pygame.sprite.Group()
+    enemies = pygame.sprite.Group()
+    all_sprites = pygame.sprite.Group(player)
+    score = 0
+    last_spawn = pygame.time.get_ticks()
+    return player, bullets, enemies, all_sprites, score, last_spawn
+
+def game_over_screen(score):
+    screen.fill(BG_COLOR)
+    draw_text(screen, "Game Over", "big", TEXT_COLOR, WIDTH//2, HEIGHT//2 - 40)
+    draw_text(screen, f"Score: {score}", "big", TEXT_COLOR, WIDTH//2, HEIGHT//2 + 20)
+    draw_text(screen, "Press R to Restart or ESC to Quit", "small",
+              TEXT_COLOR, WIDTH//2, HEIGHT//2 + 80)
+    pygame.display.flip()
+
+# ---------- Main ----------
+def main():
+    player, bullets, enemies, all_sprites, score, last_spawn = reset_game()
+    running = True
+    paused = False
+    game_over = False
+
+    while running:
+        dt = clock.tick(FPS)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+                if not game_over:
+                    if event.key == pygame.K_SPACE:
+                        # fire bullet from top-center of player
+                        b = Bullet(player.rect.centerx, player.rect.top)
+                        bullets.add(b)
+                        all_sprites.add(b)
+                    if event.key == pygame.K_p:
+                        paused = not paused
+                else:
+                    if event.key == pygame.K_r:
+                        # restart
+                        player, bullets, enemies, all_sprites, score, last_spawn = reset_game()
+                        game_over = False
+                        paused = False
+
+        if game_over:
+            game_over_screen(score)
+            continue
+
+        if paused:
+            # draw paused overlay
+            screen.fill(BG_COLOR)
+            all_sprites.draw(screen)
+            draw_text(screen, "Paused (P to resume)", "small",
+                      TEXT_COLOR, WIDTH//2, 30)
+            pygame.display.flip()
+            continue
+
+        # spawn enemies periodically
+        now = pygame.time.get_ticks()
+        if now - last_spawn >= SPAWN_MS:
+            spawn_enemy(enemies, all_sprites)
+            last_spawn = now
+
+        # updates
+        keys = pygame.key.get_pressed()
+        player.update(keys)
+        bullets.update()
+        enemies.update()
+
+        # collisions: bullets vs enemies
+        hits = pygame.sprite.groupcollide(enemies, bullets, True, True)
+        score += len(hits) * 10
+
+        # collisions: enemies vs player
+        if pygame.sprite.spritecollideany(player, enemies):
+            game_over = True
+
+        # draw
+        screen.fill(BG_COLOR)
+        all_sprites.draw(screen)
+        draw_text(screen, f"Score: {score}", "small", TEXT_COLOR, 70, 20)
+        draw_text(screen, "Move: Arrows/WASD  |  Shoot: Space  |  Pause: P  |  Quit: ESC",
+                  "small", TEXT_COLOR, WIDTH//2, HEIGHT - 20)
+        pygame.display.flip()
+
+    pygame.quit()
+    sys.exit()
+
+if __name__ == "__main__":
+    main()
